@@ -1,0 +1,41 @@
+OW20W1 PC 端提权包（v2 精简版）— MANIFEST
+生成: 2026-10-01  固件支持: A.89 / A.92（脚本自动检测并选用对应套件）
+
+文件                                           大小         md5                                用途
+-------------------------------------------- ---------- ---------------------------------- ----------------------------------------
+README.md                                    12429      c1242198fd06b0f5abf551b4a5d4d215   主文档（中文；v7 一键流程 + TWRP 维护通道 + 双固件支持）
+                                             sha256     4a9410586ffbcb64592c589fcebed474e8d3e47a417475293665f4105e64fb71
+README_en.md                                 13358      4ce0450614e8cee3cc89497049948bbb   English README (same content)
+                                             sha256     c6641aa95e8aa05cc85a2fed600ff242398d48835cfb818a72a1240ef28850c7
+一键Root.bat                                   4115       7590b7d97bf0a597190c1a1beb8c8fc1   Windows 双击入口（ASCII-only，自动找 Git Bash）
+                                             sha256     29099377ee3b25f0944ca1ae239b0c013655e2e8acb0e721ec8d85f56107be3c
+auto_root.sh                                 12973      ea4e066c308aaa1dd54ad7cd7095fd79   一键编排（安全门 / adb+设备检查 / 固件检测 / 预置含 magiskpolicy / 磨机+实时回报）
+                                             sha256     a7fe86105a987b0dce8a261267fa63544b4b0cb19d8373ca51198e7114c4baf0
+rc17_hunt_v2.sh                              17570      51563481bf21dd3758cb4eb9d3d9b775   磨机（命中后自动刷 v7 + TWRP；证据守卫；冷启动检查点）
+                                             sha256     c333b490593174dd7ecacbbcc1e884798c4c523a6d9f38643b585cb835e68aeb
+flash_partition_from_recovery.sh             3835       c01233db323246937d06a9cf58676585   分区刷写工具（白名单 + 推送校验 + 按镜像长度回读比对）
+                                             sha256     9f71b031e534d22983bc0ac4006eceb27c924c345cdccbec61102d7fe2709707
+flash_v7_after_root.sh                       5775       e076ec039e777a749e02f312fddc9a2c   手动重刷/切换 v7 的辅助脚本（含 setenforce 往返检查）
+                                             sha256     280f9f408848dec2b63c9357ccb8e58e1fd28393f28236c38be6d2d0843f1a3a
+ea0.apk                                      135638     4af0b2c5283ab616da0a8c049f567105   载体 App com.gc.p2（漏洞载荷 libp2probe.so 在内）
+                                             sha256     96e15832409b60033b68963814a9d4e08fdb1c863a303301115f2869d88a58dd
+zzq1                                         2723       c6c7d574ad0a1c5078e0b663d9b93c76   设备侧辅助 payload
+                                             sha256     98a91783b3332b95f799df790e98932822be5b1c949f08621f72d6fe55e99f00
+mod.sh                                       366        dfeee6a039770d511bb45e5ee323ec84   modprobe 兜底载荷（不可用，留档）
+                                             sha256     c53284eb108ca8c32d051084dffe341af232ed910c1aeb8d1935c56987adbcae
+magiskpolicy_arm32                           256104     bfeaa0843da89d4038e1432ed3412195   v7 开机钩子依赖（脚本自动放入 /data/local/tmp/magiskpolicy）
+                                             sha256     e5fafc1fa9486950ce9ba476f5723754d260014515ced72b4560238e6c560f3a
+boot_wifiadb_v7_policy_a92.img               33554432   ab62f167eab2983a43bd419af600c9a3   A.92 v7 boot（一键刷写目标；含 4 字节 FNV 转向）
+                                             sha256     12fe2a3ea6d969cbfb081c7dd1a0d8a9779ed3f8ef80bb33c0a5d2e622dc25cb
+boot_wifiadb_v7_policy_a89.img               33554432   2e06f10a58d1be0ddeef7f4ccab15ec2   A.89 v7 boot（同上）
+                                             sha256     aeea5a9b540dde7e4568de5740b1860db3ae7dee122ae5006426364a41242e96
+twrp-3.7.0_9-ow20w3-recovery_A89_adb4.img    25167577   57c9aa012f045161e3475f9626333850   A.89 维护 TWRP（adb 可用；内核匹配）
+                                             sha256     5af7ca379a4ce87e2794aab0f1fa11815aca7d57c7318be6351246c0861fbd3b
+twrp-3.7.0_9-ow20w3-recovery_A92_adb4.img    25167577   fe56bcf23a305c7ef30fba8dcd9e88c3   A.92 维护 TWRP（同上）
+                                             sha256     c3a5ca53b61509761ce4fa1388b3b436994e749a5d1ed49c1ab191bdf285e6b0
+recovery_原厂_A92.img                          67108864   d05b0d3763305b6453783479df08e18b   A.92 原厂 recovery（回滚用）
+                                             sha256     785dffd17825e82cdce481ef1148d927dda76d4b434fb4d173be4c1a3a880c82
+recovery_原厂_A89.img                          67108864   521436b350cda03132d749215da8cb91   A.89 原厂 recovery（回滚用）
+                                             sha256     bb22c3296517eff6e7979f6d1efb9213130ca30f91365f12d80e1746929d4688
+
+合计: 17 个文件, 252126632 B
