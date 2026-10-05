@@ -2,6 +2,10 @@
 # =============================================================================
 # flash_v7_after_root.sh —— 已永久 root 的设备上，把 boot 重刷/切换为 v7 的一键脚本
 #
+#   © 慕寒 2026 保留部分权利
+#     保留署名权与部分权利；仅供在自有设备上做安全研究，误用后果自负。
+#   运行环境：仅 Windows（Git Bash）。
+#
 #   v7 = permissive cmdline + init.rc 策略钩子：开机完成时以 init 上下文执行
 #        /data/local/tmp/magiskpolicy --live "allow shell kernel security setenforce"
 #   本脚本流程（全程带守卫，任一步失败都会安全停下并说明）：
@@ -50,11 +54,11 @@ GOT=$(md5sum "$V7" | cut -d' ' -f1)
 [ "$GOT" = "$WANT" ] || { bad "$V7 md5 不符（$GOT != $WANT）"; exit 3; }
 ok "固件 $VER → 镜像 $V7（md5 一致）"
 
-say "2) staging magiskpolicy -> /data/local/tmp/magiskpolicy"
+say "2) 预置 magiskpolicy -> /data/local/tmp/magiskpolicy"
 D push magiskpolicy_arm32 /data/local/tmp/magiskpolicy >/dev/null 2>&1
 D shell chmod 755 /data/local/tmp/magiskpolicy >/dev/null 2>&1
 M=$(D shell md5sum /data/local/tmp/magiskpolicy 2>/dev/null | tr -d '\r' | cut -d' ' -f1)
-[ "$M" = "bfeaa0843da89d4038e1432ed3412195" ] || { bad "staging 失败（设备侧 md5=${M:-读不到}）"; exit 3; }
+[ "$M" = "bfeaa0843da89d4038e1432ed3412195" ] || { bad "预置失败（设备侧 md5=${M:-读不到}）"; exit 3; }
 ok "magiskpolicy 就位：$(D shell 'ls -l /data/local/tmp/magiskpolicy' | tr -d '\r' | awk '{print $1, $NF}')"
 
 say "3) 重启进 recovery"

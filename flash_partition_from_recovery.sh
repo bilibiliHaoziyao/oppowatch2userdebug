@@ -2,6 +2,10 @@
 # =============================================================================
 #  flash_partition_from_recovery.sh —— 在 recovery 里把镜像写入指定分区（主机侧，走 adb）
 #
+#  © 慕寒 2026 保留部分权利
+#    保留署名权与部分权利；仅供在自有设备上做安全研究，误用后果自负。
+#  运行环境：仅 Windows（Git Bash）。
+#
 #  为什么必须在 recovery 里写：本机 Android 内即使 adbd 是 uid0 也无权读写块设备
 #  （SELinux/DAC 都挡），recovery 里 uid0 adb 才有块设备权限。
 #
